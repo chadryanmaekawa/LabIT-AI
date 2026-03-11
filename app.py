@@ -177,16 +177,22 @@ def default_mock_output(user_input: dict) -> dict:
                 "component_name": "Influenza A",
                 "instrument_code": "FLUA",
                 "lis_component": "Influenza A",
+                "hl7_segment": "OBX-3",
+                "result_field": "OBX-5",
             },
             {
                 "component_name": "Influenza B",
                 "instrument_code": "FLUB",
                 "lis_component": "Influenza B",
+                "hl7_segment": "OBX-3",
+                "result_field": "OBX-5",
             },
             {
                 "component_name": "RSV",
                 "instrument_code": "RSV",
                 "lis_component": "RSV",
+                "hl7_segment": "OBX-3",
+                "result_field": "OBX-5",
             },
         ],
         "interface_notes": [
@@ -236,6 +242,8 @@ Rules:
 - keep result_values simple, like ["Detected", "Not Detected"]
 - if the package insert contains panel targets, extract them
 - if interface documentation contains analyzer codes, map them
+- if HL7 content is provided, identify likely segment/value locations
+- use common conventions like OBX-3 ofr identifiers and OBX-5 for values when appropriate
 - interface_mapping must be a list of objects with:
     - component_name
     - instrument_code
@@ -253,6 +261,9 @@ Package insert text:
 
 Interface / analyzer documentation text:
 {interface_doc_text[:15000]}
+
+HL7 sample message:
+{user_input.get("hl7_sample", "")[:8000]}
 """.strip()
 
     response = client.chat.completions.create(
@@ -451,9 +462,10 @@ def apply_template(template_name: str):
     st.session_state["form_cerner_downtime_required"] = template_data.get("cerner_fields", {}).get(
     "downtime_required", "No"
     )
-
+    st.session_state["form_hl7_sample"] = ""
+    
     st.session_state["component_table"] = pd.DataFrame(
-    columns=["Component Name", "Result Values", "LOINC", "Interface Code"]
+        columns=["Component Name", "Result Values", "LOINC", "Interface Code"]
     )
     st.session_state["latest_output"] = None
     st.session_state["package_insert_text"] = ""
@@ -485,7 +497,8 @@ def reset_app_state():
     st.session_state["form_epic_verification_required"] = "Tech verification"
     st.session_state["form_epic_mychart_release"] = "Yes"
     st.session_state["form_cerner_result_status"] = "Final"
-    st.session_state["form_cerner_downtime_required"] = "No"
+    st.session_state["form_cerner_downtime_required"] = ""
+    st.session_state["form_hl7_sample"] = ""
     st.session_state["reset_counter"] += 1
 
 
@@ -552,6 +565,9 @@ if "form_cerner_result_status" not in st.session_state:
 
 if "form_cerner_downtime_required" not in st.session_state:
     st.session_state["form_cerner_downtime_required"] = "No"
+
+if "form_hl7_sample" not in st.session_state:
+    st.session_state["form_hl7_sample"] = ""
 
 if st.session_state.get("show_reset_message"):
     st.success("Ready for a new build.")
@@ -700,6 +716,13 @@ with left:
             st.error(f"Could not read interface PDF: {e}")
             st.session_state["interface_doc_text"] = ""
 
+    st.subheader("Optional HL7 Sample Message")
+    hl7_sample = st.text_area(
+        "Paste sample HL7 message",
+        height=200,
+        key="form_hl7_sample"
+    )
+
 with right:
     st.subheader("Generated Build")
 
@@ -720,7 +743,8 @@ with right:
             "panel_size": int(panel_size),
             "notes": notes,
             "epic_fields": epic_fields,
-            "cerner_fields": cerner_fields
+            "cerner_fields": cerner_fields,
+            "hl7_sample": hl7_sample,
         }
 
         st.session_state["last_user_input"] = user_input
@@ -846,6 +870,15 @@ with right:
                 st.subheader("Interface Mapping")
                 interface_df = pd.DataFrame(parsed["interface_mapping"])
                 st.dataframe(interface_df, use_container_width=True)
+
+                st.subheader("Mapping Summary")
+                for _, row in interface_df.iterrows():
+                    st.write(
+                        f"- {row.get('component_name', '')}: "
+                        f"instrument code '{row.get('instrument_code', '')}`-> "
+                        f"LIS compenent `{row.get('lis_compoenent', '')}` "
+                        f"via {row.get('hl7_segment', '')} / {row.get('result_field', '')}"
+                    )
             else:
                 st.info("No interface mapping available.")
 
