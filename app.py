@@ -7,6 +7,10 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
+from assay_library.repository import get_all_assays
+from build_engine.generator import generate_build
+from exports.exporter import export_csv
+from assay_library.ingest import extract_assay_schema_from_text, save_assay_schema
 
 # -----------------------------
 # Setup
@@ -16,7 +20,40 @@ api_key = os.getenv("OPENAI_API_KEY")
 
 st.set_page_config(page_title="LabIT AI", layout="wide")
 st.title("LabIT AI")
-st.caption("LIS Build Copilot for Epic Beaker and Cerner PathNet")
+st.caption("LIS Build Copilot")
+
+st.subheader("LIS Build Generator")
+
+assays = get_all_assays()
+assay_names = [a.name for a in assays]
+
+selected_assay_name = st.selectbox("Select Assay", assay_names)
+lis_system = st.selectbox("Select LIS", ["Epic", "Cerner", "Sunquest", "SoftLab", "Meditech", "Orchard"]
+)
+
+if st.button("Generate LIS Build"):
+    assay = next((a for a in assays if a.name == selected_assay_name), None)
+
+    if assay is None:
+        st.error("Assay not found.")
+    else:
+        build = generate_build(assay, lis_system)
+        st.subheader("Test Record")
+        st.json(build["test"])
+
+        st.subheader("Component Records")
+        st.json(build["components"])
+
+        output_file = "build.csv"
+        export_csv(build, output_file)
+
+        with open(output_file, "rb") as f:
+            st.download_button(
+                label="Download CSV",
+                data=f,
+                file_name=output_file,
+                mime="text/csv"
+            )
 
 
 # -----------------------------
@@ -836,8 +873,8 @@ with right:
 
         st.divider()
 
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["Build Draft", "Component Builder", "Interface Mapping", "Exports"]
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ["Build Draft", "Component Builder", "Interface Mapping", "Exports", "Assay Library"]
         )
 
         with tab1:
@@ -940,3 +977,46 @@ with right:
                 file_name="validation_plan.md",
                 mime="text/markdown"
             )
+
+        with tab5:
+            st.subheader("Assay Library Builder")
+
+            if st.session_state["package_insert_text"]:
+                if st.button("Generate Assay Library Entry"):
+                    with st.spinner("Extracting assay schema from package insert..."):
+                        try:
+                            schema = extract_assay_schema_from_text(
+                                st.session_state["package_insert_text"]
+                            )
+                            st.session_state["latest_assay_schema"] = schema
+                            st.success("Assay library entry generated.")
+                        except Exception as e:
+                            st.error(f"Could not generate assay schema: {e}")
+            else:
+                st.info("Upload a package insert PDF to generate an assay library entry.")
+
+            if st.session_state["latest_assay_schema"] is not None:
+                schema = st.session_state["latest_assay_schema"]
+
+                st.subheader("Generated Assay Schema")
+                st.json(schema)
+
+                components = schema.get("components", [])
+                if components:
+                    st.subheader("Assay Components")
+                    st.dataframe(pd.DataFrame(components), use_container_width=True)
+
+                assay_json = json.dumps(schema, indent=2).encode("utf-8")
+                st.download_button(
+                    "Download Assay Schema JSON",
+                    data=assay_json,
+                    file_name=f"{schema.get('assay_id', 'assay')}.json",
+                    mime="application/json"
+                )
+
+                if st.button("Save to Assay Library"):
+                    try:
+                        saved_path = save_assay_schema(schema)
+                        st.success(f"Saved assay schema to {saved_path}")
+                    except Exception as e:
+                        st.error(f"Could not save assay schema: {e}")            
